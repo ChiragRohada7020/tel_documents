@@ -14,7 +14,7 @@ Document operations are restricted to private chats unless `ALLOW_GROUP_DOCUMENT
 
 ## Deploy on Render
 
-This repository includes `render.yaml` for a free Render web service and Telegram webhooks. OCR is disabled to fit the free instance memory limit; captions, document text extraction, notes, and AI metadata remain searchable. Set `TELEGRAM_BOT_TOKEN`, `MONGODB_URI`, and `GROQ_API_KEY` in Render's environment-variable screen. After the first deploy, set `WEBHOOK_URL` to `https://<your-service>.onrender.com/<your Telegram bot token>` and redeploy. Do not commit `.env` or any credentials.
+This repository includes `render.yaml` for a free native-Python Render web service and Telegram webhooks. OCR is disabled to fit the free instance memory limit; captions, document text extraction, notes, and AI metadata remain searchable. Set `TELEGRAM_BOT_TOKEN`, `MONGODB_URI`, and `GROQ_API_KEY` in Render's environment-variable screen. After the first deploy, set `WEBHOOK_URL` to `https://<your-service>.onrender.com/<your Telegram bot token>` and redeploy. Do not commit `.env` or any credentials.
 
 ## Website API
 

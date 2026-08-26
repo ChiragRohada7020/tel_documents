@@ -84,6 +84,12 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/", include_in_schema=False)
+@app.head("/", include_in_schema=False)
+async def root():
+    return {"status": "ok"}
+
+
 @app.post("/{token}", include_in_schema=False)
 async def telegram_webhook(token: str, payload: dict):
     if token != Config.TELEGRAM_BOT_TOKEN:
