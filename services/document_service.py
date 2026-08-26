@@ -43,15 +43,109 @@ class DocumentService:
         self.docx_processor = DocxProcessor()
         self.image_processor = ImageProcessor() if Config.ENABLE_OCR else None
 
+    # Titles that carry no information and should be replaced by content
+    # derived from the caption / extracted text.
+    _GENERIC_TITLE_WORDS = {
+        "image", "images", "img", "photo", "photograph", "pic", "pics",
+        "picture", "screenshot", "document", "docs", "doc", "file", "scan",
+        "scanned", "upload", "pdf", "jpg", "jpeg", "png", "webp", "whatsapp",
+    }
+
+    @classmethod
+    def _is_generic_title(cls, title: str) -> bool:
+        """True when a title is empty or something useless like 'image' / 'IMG_20240512.jpg'."""
+        t = (title or "").strip().lower()
+        if not t:
+            return True
+        t = re.sub(r"\.(jpg|jpeg|png|webp|pdf|docx?)$", "", t)
+        t = re.sub(r"[_\-\s]+", " ", t).strip()
+        words = [w for w in t.split() if w]
+        if not words:
+            return True
+        # Pure camera/photo filename patterns: IMG_20240512, DSC00321, ...
+        joined = "".join(words)
+        if re.fullmatch(r"(img|image|photo|pic|dsc|dcim|screenshot|whatsapp)[0-9]*", joined):
+            return True
+        return all(w in cls._GENERIC_TITLE_WORDS for w in words)
+
+    @staticmethod
+    def _fallback_title_from_ocr(ocr_text: str, caption: str = "") -> str:
+        """
+        Derive a short human-readable name from the user's caption or from the
+        first meaningful line of extracted/OCR text. Returns '' when nothing
+        usable is found.
+        """
+        if caption and caption.strip():
+            return re.sub(r"\s+", " ", caption.strip())[:80].strip(" -:,.")
+        for raw in (ocr_text or "").splitlines():
+            line = raw.strip()
+            if not line or line.lower().startswith("ocr text from image"):
+                continue
+            letters = sum(ch.isalpha() for ch in line)
+            digits = sum(ch.isdigit() for ch in line)
+            if letters < 3 or letters <= digits:
+                continue  # skip numbers-only / symbol junk lines
+            snippet = " ".join(line.split()[:8])
+            if len(snippet) >= 4:
+                return snippet[:80].strip(" -:,.")
+        return ""
+
+    @staticmethod
+    def _title_slug(title: str) -> str:
+        """Turn any title into a clean lowercase filename base ('Electricity Bill - MSEB' -> 'electricity-bill-mseb')."""
+        base = re.sub(r"[^A-Za-z0-9]+", "-", (title or "")).strip("-").lower()
+        return base[:60].strip("-") or "document"
+
+    def _unique_filename(self, user_id: int, filename: str) -> str:
+        """
+        Return a filename that does not collide with this user's existing
+        documents by appending -2, -3 ... only when needed. This replaces the
+        old random hex suffix so stored names stay human-friendly.
+        """
+        root = os.path.splitext(filename)[0]
+        ext = os.path.splitext(filename)[1]
+        candidate = filename
+        counter = 2
+        try:
+            while self.db.uploaded_files.find_one(
+                {"user_id": user_id, "filename": candidate}, {"_id": 1}
+            ):
+                candidate = f"{root}-{counter}{ext}"
+                counter += 1
+                if counter > 50:
+                    # Practically unreachable; bail out with a unique suffix.
+                    return f"{root}-{uuid.uuid4().hex[:6]}{ext}"
+        except Exception as e:
+            logger.warning(f"Uniqueness check failed for {filename}: {e}")
+        return candidate
+
+    def _resolve_title(self, ai_metadata: Optional[Dict[str, Any]], ocr_text: str,
+                       caption: str = "", original_name: str = "") -> str:
+        """
+        Pick the best available document title:
+        specific AI title > caption > first meaningful content line > original filename stem.
+        Generic AI titles like 'image' are rejected and replaced.
+        """
+        ai_title = ((ai_metadata or {}).get("title") or "").strip()
+        if ai_title and not self._is_generic_title(ai_title):
+            return ai_title
+        fallback = self._fallback_title_from_ocr(ocr_text, caption)
+        if fallback:
+            return fallback
+        stem = os.path.splitext(original_name)[0] if original_name else ""
+        if stem and not self._is_generic_title(stem):
+            return stem
+        return ai_title or stem or "document"
+
     @staticmethod
     def _make_stored_name(title: str, unique: str, ext: str) -> str:
         """
-        Build a clean stored filename from an AI-generated title:
-        'PAN Card' + 'a1b2c3d4' + '.jpg'  ->  'pan-card-a1b2c3d4.jpg'
+        Backward-compatible shim: build a stored filename from a title.
+        'PAN Card' + '.jpg'  ->  'pan-card.jpg'  (suffix kept empty for new code).
         """
-        base = re.sub(r"[^A-Za-z0-9]+", "-", (title or "document")).strip("-").lower()
-        base = base[:40].strip("-") or "document"
-        return f"{base}-{unique}{ext}"
+        base = DocumentService._title_slug(title)
+        suffix = f"-{unique}" if unique else ""
+        return f"{base}{suffix}{ext}"
 
     async def process_document(self, document, user_id: int, context, caption: str = "") -> Dict[str, Any]:
         """
@@ -118,11 +212,13 @@ class DocumentService:
                     logger.warning(f"Metadata generation failed for {original_name}: {meta_err}")
                     ai_metadata = None
 
-                title = (ai_metadata or {}).get("title") or os.path.splitext(original_name)[0]
+                # Prefer a specific AI title; otherwise derive one from the
+                # caption / actual document content instead of 'IMG_2024'.
+                resolved_title = self._resolve_title(ai_metadata, extracted_text, caption, original_name)
 
                 # Use a stable generated name for metadata/indexing. The file itself
                 # remains on Telegram; the temporary download is deleted on exit.
-                stored_name = sanitize_filename(self._make_stored_name(title, unique, orig_ext))
+                stored_name = sanitize_filename(self._unique_filename(user_id, self._title_slug(resolved_title) + orig_ext))
 
                 # Store metadata + index chunks under the final stored name
                 self._store_file_metadata(
@@ -206,10 +302,12 @@ class DocumentService:
                     logger.warning(f"Metadata generation failed: {meta_err}")
                     ai_metadata = None
 
-                title = (ai_metadata or {}).get("title") or (caption or "image")
+                # Never settle for 'image': resolve a meaningful name from the
+                # caption or whatever OCR managed to read off the photo.
+                resolved_title = self._resolve_title(ai_metadata, ocr_text, caption)
 
                 # Store only metadata and the Telegram file ID; no local copy is kept.
-                stored_name = sanitize_filename(self._make_stored_name(title, unique, extension))
+                stored_name = sanitize_filename(self._unique_filename(user_id, self._title_slug(resolved_title) + extension))
 
                 # Store metadata + index chunks under the final stored name
                 self._store_file_metadata(

@@ -178,7 +178,7 @@ Respond with ONLY valid JSON, no other text:
         Returns a dict on success, None on failure.
         """
         desc = (user_description or "").strip() or "(none provided)"
-        doc_excerpt = (document_text or "").strip()[:3000] or "(no text extracted)"
+        doc_excerpt = (document_text or "").strip()[:4000] or "(no text extracted)"
 
         prompt = f"""You are an intelligent personal document organizer.
 
@@ -219,7 +219,8 @@ Return ONLY valid JSON in exactly this format:
 METADATA RULES:
 
 1. Understand the actual meaning of the document. Do not rely only on the filename.
-2. Create a clear title that a normal person would understand.
+2. Create a clear, SPECIFIC title a normal person would recognise at a glance. Prefer the pattern "<Document Type> - <Organization/Person> - <Period/Number>", e.g. "Electricity Bill - MSEDCL - August 2026", "PAN Card - Chirag Rohada", "Rent Receipt - Sharma PG - June". NEVER output generic titles such as "Image", "Photo", "Screenshot", "Document", "File" or camera names like "IMG_20240512".
+2b. Capture EVERY useful detail present in the content so nothing searchable is lost: invoice/receipt/bill numbers, amounts and currencies, issue/due/expiry dates, policy or registration numbers (without breaking rule 10), organization names, persons, locations, subject matter, months/years. Put identifiers into entities.important_numbers and topical words into tags.
 3. Generate useful tags that describe document type, purpose, related concepts, important subjects, organizations, relevant categories.
 4. Generate search_aliases that help find the document even when the user writes the name differently.
 5. Include common spelling variations ONLY when they are realistic and useful.
@@ -235,13 +236,29 @@ METADATA RULES:
 
 Return ONLY valid JSON."""
 
+        # NOTE: reasoning models (e.g. openai/gpt-oss-*) spend completion tokens
+        # on chain-of-thought before emitting the JSON; a small budget truncated
+        # the object mid-way and made metadata generation fail silently.
+        meta_max_tokens = max(self.max_tokens, 2600)
+
+        async def _create(extra_kwargs: Optional[dict]) -> object:
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": meta_max_tokens,
+            }
+            payload.update(extra_kwargs or {})
+            return await self.client.chat.completions.create(**payload)
+
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=1200,
-            )
+            try:
+                # Lower reasoning effort keeps thinking short so real JSON fits.
+                response = await _create({"reasoning_effort": "low"})
+            except Exception as effort_err:
+                if "reasoning_effort" not in str(effort_err).lower():
+                    raise
+                response = await _create(None)  # model without that parameter
             raw = response.choices[0].message.content or ""
             metadata = self._parse_json(raw)
             if metadata is None:
@@ -253,8 +270,11 @@ Return ONLY valid JSON."""
 
     @staticmethod
     def _parse_json(raw: str) -> Optional[dict]:
-        """Extract a JSON object from model output (tolerates code fences)."""
+        """Extract a JSON object from model output (tolerates code fences / think blocks)."""
         text = (raw or "").strip()
+        # Some models emit <think>...</think> before the actual answer.
+        if "</think>" in text:
+            text = text.split("</think>", 1)[1]
         if text.startswith("```"):
             text = text.strip("`")
             if text.lower().startswith("json"):
