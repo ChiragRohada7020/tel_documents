@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: telegram-ai-document-vault
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DATABASE
+        value: document_vault
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_CLASSIFIER_MODEL
+        value: openai/gpt-oss-20b
+      - key: POLLING_MODE
+        value: "false"
+      # After Render creates the service URL, set this in the dashboard to:
+      # https://<your-service>.onrender.com/<your Telegram bot token>
+      - key: WEBHOOK_URL
+        sync: false
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: OCR_LANGUAGES
+        value: en,hi,mr
+      - key: ALLOW_GROUP_DOCUMENT_ACCESS
+        value: "false"
