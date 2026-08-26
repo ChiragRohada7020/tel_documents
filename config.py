@@ -48,6 +48,7 @@ class Config:
 
     # OCR
     OCR_LANGUAGES: str = os.getenv("OCR_LANGUAGES", "en")
+    ENABLE_OCR: bool = os.getenv("ENABLE_OCR", "false").lower() == "true"
 
     # App environment
     APP_ENV: str = os.getenv("APP_ENV", "development")

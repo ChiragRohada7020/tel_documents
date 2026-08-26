@@ -41,7 +41,7 @@ class DocumentService:
 
         self.pdf_processor = PDFProcessor()
         self.docx_processor = DocxProcessor()
-        self.image_processor = ImageProcessor()
+        self.image_processor = ImageProcessor() if Config.ENABLE_OCR else None
 
     @staticmethod
     def _make_stored_name(title: str, unique: str, ext: str) -> str:
@@ -84,7 +84,7 @@ class DocumentService:
                 # Extract text based on file type
                 if original_name.lower().endswith(".pdf"):
                     text = await asyncio.to_thread(self.pdf_processor.extract_text, tmp_path)
-                    if not text.strip() and self.image_processor.is_available():
+                    if not text.strip() and self.image_processor and self.image_processor.is_available():
                         pages = await asyncio.to_thread(self.pdf_processor.render_pages_for_ocr, tmp_path)
                         ocr_pages = []
                         for page in pages:
@@ -183,7 +183,7 @@ class DocumentService:
                 # caption provides user context; OCR contributes details seen
                 # inside the image, and both are indexed together.
                 ocr_text = ""
-                if self.image_processor.is_available():
+                if self.image_processor and self.image_processor.is_available():
                     ocr_text = await asyncio.to_thread(self.image_processor.extract_text, tmp_path)
                 text = "\n\n".join(part for part in [
                     f"User description: {caption.strip()}" if caption and caption.strip() else "",

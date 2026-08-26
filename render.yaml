@@ -30,8 +30,8 @@ services:
         value: production
       - key: LOG_LEVEL
         value: INFO
-      - key: OCR_LANGUAGES
-        value: en,hi,mr
+      - key: ENABLE_OCR
+        value: "false"
       - key: ENABLE_LOCAL_EMBEDDINGS
         value: "false"
       - key: ALLOW_GROUP_DOCUMENT_ACCESS
