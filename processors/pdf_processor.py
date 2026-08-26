@@ -40,7 +40,10 @@ class PDFProcessor:
     def render_pages_for_ocr(self, file_path: str) -> List[object]:
         """Render PDF pages to PIL images when OCR is needed for scanned PDFs."""
         try:
-            import fitz  # PyMuPDF
+            try:
+                import pymupdf as fitz  # PyMuPDF >=1.24 canonical import
+            except ImportError:
+                import fitz  # older PyMuPDF fallback
             from PIL import Image
 
             images = []
