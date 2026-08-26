@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>J.A.R.V.I.S. — Document Vault</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='none' stroke='%2300e5ff' stroke-width='6'/><circle cx='50' cy='50' r='16' fill='%2300e5ff'/></svg>" />
+</head>
+<body>
+<div id="bg-grid"></div>
+<div id="scanlines"></div>
+
+<!-- ==================== BOOT SCREEN ==================== -->
+<div id="boot-screen">
+  <div class="boot-core">
+    <div class="ring r1"></div>
+    <div class="ring r2"></div>
+    <div class="ring r3"></div>
+    <div class="ring r4"></div>
+    <div class="core-dot"></div>
+  </div>
+  <h1 class="boot-title">J.A.R.V.I.S.</h1>
+  <p class="boot-sub">Just A Rather Very Intelligent System</p>
+  <pre id="boot-log"></pre>
+  <div class="boot-bar"><div id="boot-fill"></div></div>
+</div>
+
+<!-- ==================== MAIN APP ==================== -->
+<div id="app" class="hidden">
+  <!-- TOP BAR -->
+  <header id="topbar">
+    <div class="brand">
+      <div class="brand-mark">◈</div>
+      <div class="brand-text">
+        <h1>J.A.R.V.I.S.</h1>
+        <span>DOCUMENT VAULT INTERFACE · v2.6</span>
+      </div>
+    </div>
+
+    <div class="clockbox">
+      <div id="clock">--:--:--</div>
+      <div id="datestamp">— — —</div>
+    </div>
+
+    <div class="statusbox">
+      <div class="chip" id="chip-api"><i class="led"></i>API <b>OFFLINE</b></div>
+      <div class="chip" id="chip-vault"><i class="led"></i>VAULT <b>—</b></div>
+      <div class="chip" id="chip-latency"><i class="led"></i>LATENCY <b>— ms</b></div>
+      <button class="icon-btn" id="btn-sound" title="Toggle sound">🔇</button>
+      <button class="icon-btn" id="btn-settings" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <!-- HUD GRID -->
+  <main id="grid">
+    <!-- LEFT COLUMN -->
+    <section class="col col-left">
+      <div class="panel">
+        <div class="panel-title">VAULT STATISTICS</div>
+        <div class="stats-grid">
+          <div class="stat"><div class="stat-num" id="stat-total">0</div><div class="stat-label">TOTAL FILES</div></div>
+          <div class="stat"><div class="stat-num" id="stat-docs">0</div><div class="stat-label">DOCUMENTS</div></div>
+          <div class="stat"><div class="stat-num" id="stat-photos">0</div><div class="stat-label">IMAGES</div></div>
+          <div class="stat warn"><div class="stat-num" id="stat-expiring">0</div><div class="stat-label">EXPIRING ≤30d</div></div>
+        </div>
+        <div class="panel-foot" id="last-sync">LAST SYNC: —</div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">CATEGORY MATRIX</div>
+        <div id="category-bars" class="cat-bars">
+          <div class="empty-hint">No categories detected yet.<br />Upload documents to populate the matrix.</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">SYSTEM DIAGNOSTICS</div>
+        <ul class="diag-list">
+          <li><span>SESSION UPTIME</span><b id="diag-uptime">00:00:00</b></li>
+          <li><span>API LATENCY</span><b id="diag-latency">— ms</b></li>
+          <li><span>SEARCH MODE</span><b id="diag-search">TEXT INDEX</b></li>
+          <li><span>OCR ENGINE</span><b>TESSERACT</b></li>
+          <li><span>AI CORE</span><b>GROQ LLM</b></li>
+          <li><span>OPERATOR ID</span><b id="diag-user">NOT SET</b></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- CENTER COLUMN -->
+    <section class="col col-center">
+      <div class="reactor-wrap" id="reactor">
+        <div class="ring r1"></div>
+        <div class="ring r2"></div>
+        <div class="ring r3"></div>
+        <div class="ring r4"></div>
+        <div class="ring r5"></div>
+        <div class="reactor-core">
+          <div class="core-inner"></div>
+        </div>
+        <div class="reactor-state" id="reactor-state">STANDBY</div>
+      </div>
+
+      <div class="panel console-panel">
+        <div class="panel-title">COMMUNICATION CONSOLE</div>
+        <div id="chat-log">
+          <div class="msg ai">
+            <div class="msg-head">J.A.R.V.I.S.</div>
+            <div class="msg-body">Systems online. I am monitoring your document vault.
+Ask me anything about your files, or use the archive panel on the right.</div>
+          </div>
+        </div>
+        <form id="chat-form" autocomplete="off">
+          <span class="prompt">❯</span>
+          <input id="chat-input" type="text" maxlength="2000" placeholder="Speak to J.A.R.V.I.S…" />
+          <button type="submit" id="chat-send">TRANSMIT</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- RIGHT COLUMN -->
+    <section class="col col-right">
+      <div class="panel archive-panel">
+        <div class="panel-title">DOCUMENT ARCHIVE</div>
+        <div class="archive-tools">
+          <input id="doc-filter" type="text" placeholder="Quick filter…" />
+          <button id="btn-semantic" title="Semantic vault search">⌕ SCAN</button>
+        </div>
+        <div id="search-results" class="search-results hidden"></div>
+        <div id="doc-list" class="doc-list">
+          <div class="empty-hint">Archive empty. Configure the connection and upload your first document.</div>
+        </div>
+      </div>
+
+      <div class="panel upload-panel">
+        <div class="panel-title">UPLOAD BAY</div>
+        <div id="dropzone">
+          <div class="dz-icon">⇪</div>
+          <div class="dz-text">DROP FILE HERE<br /><span>or click to browse · PDF / DOCX / IMAGE</span></div>
+          <input id="file-input" type="file" accept=".pdf,.docx,.jpg,.jpeg,.png,.webp,image/*" hidden />
+        </div>
+        <input id="upload-desc" type="text" maxlength="500" placeholder="Description (optional) — helps AI index it better" />
+        <div id="upload-status" class="upload-status hidden"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ==================== SETTINGS MODAL ==================== -->
+<div class="modal-overlay hidden" id="modal-settings">
+  <div class="modal">
+    <div class="modal-title">CONNECTION SETTINGS</div>
+    <label>API BASE URL
+      <input id="set-base" type="text" placeholder="(empty = same origin)" />
+    </label>
+    <label>X-API-KEY
+      <input id="set-key" type="password" placeholder="Your API_KEY value" />
+    </label>
+    <label>OPERATOR USER ID
+      <input id="set-user" type="number" placeholder="Your Telegram numeric user ID" />
+    </label>
+    <p class="modal-note">Credentials are stored only in this browser's localStorage and sent as the X-API-Key header. Never commit them anywhere.</p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-close>CANCEL</button>
+      <button class="btn primary" id="btn-save-settings">SAVE & CONNECT</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== DOCUMENT DETAIL MODAL ==================== -->
+<div class="modal-overlay hidden" id="modal-doc">
+  <div class="modal wide">
+    <div class="modal-title" id="doc-modal-title">DOCUMENT</div>
+    <div id="doc-meta" class="doc-meta"></div>
+    <div class="doc-text-label">INDEXED TEXT PREVIEW</div>
+    <pre id="doc-text" class="doc-text"></pre>
+    <div class="doc-text-label">ADD A NOTE (BECOMES SEARCHABLE)</div>
+    <div class="note-row">
+      <input id="note-input" type="text" maxlength="1000" placeholder="e.g. renewed until March 2027" />
+      <button class="btn primary" id="btn-add-note">SAVE NOTE</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn danger" id="btn-delete-doc">DELETE DOCUMENT</button>
+      <button class="btn ghost" data-close>CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== CONFIRM MODAL ==================== -->
+<div class="modal-overlay hidden" id="modal-confirm">
+  <div class="modal small">
+    <div class="modal-title">CONFIRM ACTION</div>
+    <p id="confirm-text" class="confirm-text">Are you sure?</p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-close>ABORT</button>
+      <button class="btn danger" id="btn-confirm-yes">CONFIRM</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOASTS -->
+<div id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

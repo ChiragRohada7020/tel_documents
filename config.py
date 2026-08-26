@@ -35,9 +35,6 @@ class Config:
     # Embeddings
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "384"))
-    # Disable on small cloud instances to avoid loading the Torch model; text
-    # search, OCR, descriptions, and AI metadata remain available.
-    ENABLE_LOCAL_EMBEDDINGS: bool = os.getenv("ENABLE_LOCAL_EMBEDDINGS", "true").lower() == "true"
 
     # Webhook / Polling
     WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
@@ -48,7 +45,14 @@ class Config:
 
     # OCR
     OCR_LANGUAGES: str = os.getenv("OCR_LANGUAGES", "en")
+
+    # Feature flags
+    # ENABLE_OCR: Tesseract OCR for images/scanned PDFs (auto-detects availability).
     ENABLE_OCR: bool = os.getenv("ENABLE_OCR", "false").lower() == "true"
+    # ENABLE_LOCAL_EMBEDDINGS: load the local sentence-transformer model for
+    # semantic search. Keep false on small cloud instances; text search,
+    # OCR, descriptions, and AI metadata remain available.
+    ENABLE_LOCAL_EMBEDDINGS: bool = os.getenv("ENABLE_LOCAL_EMBEDDINGS", "false").lower() == "true"
 
     # App environment
     APP_ENV: str = os.getenv("APP_ENV", "development")

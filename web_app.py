@@ -1,11 +1,15 @@
 """Authenticated REST API and Telegram webhook for the document vault."""
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from telegram import Update
 from telegram.ext import Application
@@ -63,6 +67,34 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Telegram AI Document Vault API", version="1.0.0", lifespan=lifespan)
 
+# Allow the JARVIS dashboard (and local dev frontends) to call this API from
+# other origins during development. Auth is still enforced per-request via
+# the X-API-Key header.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return RedirectResponse(url="/dashboard/")
+
+
+@app.get("/dashboard", include_in_schema=False)
+async def dashboard_redirect():
+    return RedirectResponse(url="/dashboard/")
+
+
+# Serve the JARVIS dashboard from the same origin (no CORS needed in prod).
+# Registered AFTER the redirect routes above so GET /dashboard (no trailing
+# slash) is redirected to /dashboard/ instead of 405-ing on the /{token} route.
+_DASHBOARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard")
+if os.path.isdir(_DASHBOARD_DIR):
+    app.mount("/dashboard", StaticFiles(directory=_DASHBOARD_DIR, html=True), name="dashboard")
+
 
 def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
     if not Config.API_KEY or x_api_key != Config.API_KEY:
@@ -81,12 +113,6 @@ class NoteRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
-
-
-@app.get("/", include_in_schema=False)
-@app.head("/", include_in_schema=False)
-async def root():
     return {"status": "ok"}
 
 

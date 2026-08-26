@@ -80,6 +80,7 @@ class SearchService:
             },
             {
                 "$project": {
+                    "_id": 0,
                     "content": 1,
                     "source": 1,
                     "score": {"$meta": "vectorSearchScore"},
@@ -158,7 +159,7 @@ class SearchService:
             results = list(
                 self.db.document_chunks.find(
                     {"user_id": user_id, "$text": {"$search": query}},
-                    {"content": 1, "source": 1, "score": {"$meta": "textScore"}},
+                    {"_id": 0, "content": 1, "source": 1, "score": {"$meta": "textScore"}},
                 ).sort([("score", {"$meta": "textScore"})]).limit(top_k)
             )
             logger.info(f"Text search for '{query}' returned {len(results)} results.")
