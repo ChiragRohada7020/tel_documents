@@ -541,9 +541,18 @@ async def _send_stored_file(update: Update, file_info: dict) -> None:
     display_name = file_info.get("ai_title") or filename
     # CallbackQuery updates do not populate ``update.message``. Their message
     # is exposed as ``effective_message`` / ``callback_query.message``.
-    message = update.effective_message or update.callback_query.message
+    # The message object may be unavailable (e.g. the originating message was
+    # edited/deleted), so guard before calling ``reply_text``.
+    message = getattr(update, "effective_message", None)
+    if message is None:
+        query = getattr(update, "callback_query", None)
+        message = getattr(query, "message", None)
 
-    await message.reply_text(f"📤 Sending you: {display_name}")
+    if message is not None:
+        try:
+            await message.reply_text(f"📤 Sending you: {display_name}")
+        except Exception as e:
+            logger.warning(f"Could not send 'sending' notice: {e}")
     try:
         if file_info.get("file_type") == "photo":
             await telegram_service.send_photo_by_file_id(chat_id, file_id, caption=f"📄 {display_name}")
@@ -551,10 +560,16 @@ async def _send_stored_file(update: Update, file_info: dict) -> None:
             await telegram_service.send_document_by_file_id(chat_id, file_id, caption=f"📄 {display_name}")
     except Exception as e:
         logger.error(f"Telegram file-id send failed for {filename}: {e}")
-        await message.reply_text(
-            f'⚠️ Telegram could not send "{display_name}". Please re-upload it.',
-            reply_markup=_build_followup_keyboard(),
-        )
+        if message is not None:
+            try:
+                await message.reply_text(
+                    f'⚠️ Telegram could not send "{display_name}". Please re-upload it.',
+                    reply_markup=_build_followup_keyboard(),
+                )
+            except Exception as e2:
+                logger.warning(f"Could not send error notice: {e2}")
+        else:
+            logger.warning("No message object available to send error notice.")
 
 
 async def _chat_with_ai(
@@ -723,9 +738,12 @@ async def _buffer_album_photo(context: ContextTypes.DEFAULT_TYPE, message) -> No
     the same ``media_group_id``. We collect them and, after a short quiet
     window, combine every photo into a single PDF.
     """
-    user_id = message.effective_user.id
+    # ``message`` is ``update.message`` (a PTB Message), so use Message
+    # attributes -- it has no ``effective_user`` / ``effective_chat``.
+    user_id = message.from_user.id
     group_id = message.media_group_id
     photo = message.photo[-1]
+    chat_id = message.chat_id
 
     groups = context.user_data.setdefault("_album_groups", {})
     group = groups.setdefault(group_id, {"file_ids": [], "caption": ""})
@@ -733,35 +751,35 @@ async def _buffer_album_photo(context: ContextTypes.DEFAULT_TYPE, message) -> No
     if message.caption:
         group["caption"] = message.caption
 
-    # (Re)schedule the combine so it only fires after the album is complete.
-    jobs = context.user_data.setdefault("_album_jobs", {})
-    previous = jobs.get(group_id)
-    if previous:
-        previous.schedule_removal()
-    job = context.job_queue.run_once(
-        _flush_album,
-        _ALBUM_FLUSH_DELAY,
-        data=(user_id, group_id),
-        chat_id=message.effective_chat.id,
-    )
-    jobs[group_id] = job
+    # Schedule (or reschedule) the combine so it only fires after the album is
+    # complete. We use an asyncio task instead of the JobQueue because the
+    # JobQueue may be disabled (see "JobQueue is unavailable" in the logs).
+    tasks = context.user_data.setdefault("_album_tasks", {})
+    previous = tasks.get(group_id)
+    if previous and not previous.done():
+        previous.cancel()
+    task = asyncio.create_task(_delayed_flush(context, user_id, group_id, chat_id))
+    tasks[group_id] = task
 
     if len(group["file_ids"]) == 1:
         await context.bot.send_message(
-            chat_id=message.effective_chat.id,
+            chat_id=chat_id,
             text="🖼️ Collecting images from your album…",
         )
 
 
-async def _flush_album(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Combine a buffered album of photos into a single PDF and store it."""
-    user_id, group_id = context.job.data
-    chat_id = context.job.chat_id
+async def _delayed_flush(context: ContextTypes.DEFAULT_TYPE, user_id: int, group_id: str, chat_id: int) -> None:
+    """Wait for the album quiet window, then combine the buffered photos."""
+    await asyncio.sleep(_ALBUM_FLUSH_DELAY)
+    await _flush_album(context, user_id, group_id, chat_id)
 
+
+async def _flush_album(context: ContextTypes.DEFAULT_TYPE, user_id: int, group_id: str, chat_id: int) -> None:
+    """Combine a buffered album of photos into a single PDF and store it."""
     groups = context.user_data.get("_album_groups", {})
     group = groups.pop(group_id, None)
-    jobs = context.user_data.get("_album_jobs", {})
-    jobs.pop(group_id, None)
+    tasks = context.user_data.get("_album_tasks", {})
+    tasks.pop(group_id, None)
 
     if not group or not group["file_ids"]:
         return
@@ -781,10 +799,15 @@ async def _flush_album(context: ContextTypes.DEFAULT_TYPE) -> None:
             pdf_path = os.path.join(tmp_dir, "combined.pdf")
             ImageComposer().combine_to_pdf(image_paths, pdf_path)
 
-            # Send the combined PDF back to the user.
+            # Send the combined PDF back to the user. The explicit ``filename``
+            # makes Telegram report the file as ``combined.pdf`` so the vault
+            # recognises it as a PDF.
             with open(pdf_path, "rb") as pdf_file:
                 message = await context.bot.send_document(
-                    chat_id=chat_id, document=pdf_file, caption=caption
+                    chat_id=chat_id,
+                    document=pdf_file,
+                    caption=caption,
+                    filename="combined.pdf",
                 )
 
             # Store it in the vault by processing the Telegram-hosted PDF.
