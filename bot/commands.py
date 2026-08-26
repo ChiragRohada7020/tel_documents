@@ -5,7 +5,9 @@ Telegram bot command and message handlers.
 import asyncio
 import difflib
 import logging
+import os
 import re
+import tempfile
 from functools import lru_cache
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -19,6 +21,7 @@ from services.groq_service import GroqService
 from services.document_service import DocumentService
 from services.search_service import SearchService
 from services.memory_service import MemoryService
+from processors.image_composer import ImageComposer
 
 logger = logging.getLogger(__name__)
 
@@ -709,12 +712,124 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(f"❌ Error processing document: {result['error']}")
 
 
+# Seconds of quiet after the last photo in an album before combining.
+_ALBUM_FLUSH_DELAY = 5
+
+
+async def _buffer_album_photo(context: ContextTypes.DEFAULT_TYPE, message) -> None:
+    """Buffer a photo that belongs to a media group (album).
+
+    Telegram delivers each photo in an album as a separate message that shares
+    the same ``media_group_id``. We collect them and, after a short quiet
+    window, combine every photo into a single PDF.
+    """
+    user_id = message.effective_user.id
+    group_id = message.media_group_id
+    photo = message.photo[-1]
+
+    groups = context.user_data.setdefault("_album_groups", {})
+    group = groups.setdefault(group_id, {"file_ids": [], "caption": ""})
+    group["file_ids"].append(photo.file_id)
+    if message.caption:
+        group["caption"] = message.caption
+
+    # (Re)schedule the combine so it only fires after the album is complete.
+    jobs = context.user_data.setdefault("_album_jobs", {})
+    previous = jobs.get(group_id)
+    if previous:
+        previous.schedule_removal()
+    job = context.job_queue.run_once(
+        _flush_album,
+        _ALBUM_FLUSH_DELAY,
+        data=(user_id, group_id),
+        chat_id=message.effective_chat.id,
+    )
+    jobs[group_id] = job
+
+    if len(group["file_ids"]) == 1:
+        await context.bot.send_message(
+            chat_id=message.effective_chat.id,
+            text="🖼️ Collecting images from your album…",
+        )
+
+
+async def _flush_album(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Combine a buffered album of photos into a single PDF and store it."""
+    user_id, group_id = context.job.data
+    chat_id = context.job.chat_id
+
+    groups = context.user_data.get("_album_groups", {})
+    group = groups.pop(group_id, None)
+    jobs = context.user_data.get("_album_jobs", {})
+    jobs.pop(group_id, None)
+
+    if not group or not group["file_ids"]:
+        return
+
+    file_ids = group["file_ids"]
+    caption = group["caption"] or f"Combined PDF of {len(file_ids)} images"
+
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_document")
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_paths = []
+            for index, file_id in enumerate(file_ids):
+                path = os.path.join(tmp_dir, f"img_{index}.jpg")
+                await _get_telegram_service().download_file(file_id, path)
+                image_paths.append(path)
+
+            pdf_path = os.path.join(tmp_dir, "combined.pdf")
+            ImageComposer().combine_to_pdf(image_paths, pdf_path)
+
+            # Send the combined PDF back to the user.
+            with open(pdf_path, "rb") as pdf_file:
+                message = await context.bot.send_document(
+                    chat_id=chat_id, document=pdf_file, caption=caption
+                )
+
+            # Store it in the vault by processing the Telegram-hosted PDF.
+            document = getattr(message, "document", None)
+            if document:
+                result = await _get_doc_service().process_document(
+                    document, user_id, context, caption=caption
+                )
+                if result.get("success"):
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"✅ Combined {len(file_ids)} images into a PDF and indexed it.\n"
+                            f"📄 {result.get('stored_as') or result.get('filename')}\n"
+                            f"📊 {result['chunks']} chunks"
+                        ),
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"⚠️ Combined PDF sent, but indexing failed: {result.get('error')}",
+                    )
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id, text="✅ Combined PDF sent to your chat."
+                )
+    except Exception as e:
+        logger.error(f"Failed to combine album into PDF: {e}")
+        await context.bot.send_message(
+            chat_id=chat_id, text=f"❌ Could not combine the images: {e}"
+        )
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle image uploads. Uses caption as searchable text, falls back to OCR."""
     user_id = update.effective_user.id
     if not _vault_access_allowed(update):
         await _deny_group_vault_access(update)
         return
+
+    # Media group (album) of multiple photos -> combine into a single PDF.
+    if update.message.media_group_id:
+        await _buffer_album_photo(context, update.message)
+        return
+
     chat_id = update.effective_chat.id
     photo = update.message.photo[-1]  # Get the highest resolution photo
     caption = update.message.caption or ""

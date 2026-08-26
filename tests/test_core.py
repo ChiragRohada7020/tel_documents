@@ -82,5 +82,23 @@ class EmbeddingTests(unittest.TestCase):
             self.assertEqual(service.embed_text("hello"), [0.1, 0.2])
             load_model.assert_called_once()
 
+
+class ImageComposerTests(unittest.TestCase):
+    def test_combine_images_to_pdf(self):
+        from processors.image_composer import ImageComposer
+        from PIL import Image
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            paths = []
+            for i in range(3):
+                p = os.path.join(d, f"img_{i}.png")
+                Image.new("RGB", (10, 10), (i * 60, 0, 0)).save(p)
+                paths.append(p)
+            out = os.path.join(d, "out.pdf")
+            ImageComposer().combine_to_pdf(paths, out)
+            self.assertTrue(os.path.exists(out))
+            self.assertGreater(os.path.getsize(out), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

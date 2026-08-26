@@ -9,6 +9,7 @@ A private-chat Telegram bot that stores PDF, DOCX, and image uploads, indexes th
 - **Search** — keyword text search over indexed chunks (local embeddings are supported but disabled by default to keep memory low).
 - **Chat** — ask questions about your documents; the bot retrieves relevant excerpts and answers via Groq.
 - **Expiry reminders** — daily notifications for documents with an expiry date.
+- **Image albums → PDF** — send a media-group (album) of photos and the bot merges them into a single PDF, sends it back, and indexes it.
 - **JARVIS dashboard** — a themed web UI at `/dashboard` (stats, document archive, semantic scan, chat console, upload bay).
 
 ## Setup (local)
