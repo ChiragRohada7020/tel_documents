@@ -131,10 +131,7 @@ class DocumentService:
                 metadata_stored = True
 
                 chunks = self.chunker.chunk(text)
-                embeddings = await asyncio.wait_for(
-                    asyncio.to_thread(self.embedding_service.embed_texts, chunks),
-                    timeout=Config.EMBEDDING_TIMEOUT_SECONDS,
-                )
+                embeddings = await self._embeddings_for_chunks(chunks)
                 await asyncio.to_thread(self._index_chunks, user_id, stored_name, chunks, embeddings)
                 self._link_document_to_existing(user_id, stored_name, ai_metadata or {})
 
@@ -222,10 +219,7 @@ class DocumentService:
                 metadata_stored = True
 
                 chunks = self.chunker.chunk(text)
-                embeddings = await asyncio.wait_for(
-                    asyncio.to_thread(self.embedding_service.embed_texts, chunks),
-                    timeout=Config.EMBEDDING_TIMEOUT_SECONDS,
-                )
+                embeddings = await self._embeddings_for_chunks(chunks)
                 await asyncio.to_thread(self._index_chunks, user_id, stored_name, chunks, embeddings)
                 self._link_document_to_existing(user_id, stored_name, ai_metadata or {})
 
@@ -325,6 +319,15 @@ class DocumentService:
         if documents:
             self.db.document_chunks.insert_many(documents)
             logger.info(f"Indexed {len(documents)} chunks for user {user_id} from {source}")
+
+    async def _embeddings_for_chunks(self, chunks: list) -> list:
+        """Avoid loading the large local ML model when cloud memory is limited."""
+        if not Config.ENABLE_LOCAL_EMBEDDINGS:
+            return [None] * len(chunks)
+        return await asyncio.wait_for(
+            asyncio.to_thread(self.embedding_service.embed_texts, chunks),
+            timeout=Config.EMBEDDING_TIMEOUT_SECONDS,
+        )
 
     @staticmethod
     def _connection_terms(metadata: Dict[str, Any]) -> set[str]:
@@ -590,7 +593,7 @@ class DocumentService:
         )
         searchable_note = f"User-added detail for {file_info['filename']}: {note}"
         chunks = self.chunker.chunk(searchable_note)
-        embeddings = self.embedding_service.embed_texts(chunks)
+        embeddings = self.embedding_service.embed_texts(chunks) if Config.ENABLE_LOCAL_EMBEDDINGS else [None] * len(chunks)
         self._index_chunks(user_id, file_info["filename"], chunks, embeddings)
         logger.info(f"Added a searchable user note to {file_info['filename']} for user {user_id}")
         return file_info

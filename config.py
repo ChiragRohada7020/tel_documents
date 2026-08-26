@@ -35,6 +35,9 @@ class Config:
     # Embeddings
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "384"))
+    # Disable on small cloud instances to avoid loading the Torch model; text
+    # search, OCR, descriptions, and AI metadata remain available.
+    ENABLE_LOCAL_EMBEDDINGS: bool = os.getenv("ENABLE_LOCAL_EMBEDDINGS", "true").lower() == "true"
 
     # Webhook / Polling
     WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")

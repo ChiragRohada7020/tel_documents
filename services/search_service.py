@@ -10,6 +10,7 @@ import numpy as np
 
 from database.mongo import get_db
 from services.embedding_service import EmbeddingService
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,10 @@ class SearchService:
         Returns:
             A list of matching document chunks with scores.
         """
+        if not Config.ENABLE_LOCAL_EMBEDDINGS:
+            logger.info("Local embeddings disabled; using lightweight text search.")
+            return self._text_search(query, user_id, top_k)
+
         # Try Atlas vector search first
         results = self._vector_search(query, user_id, top_k)
         if results:

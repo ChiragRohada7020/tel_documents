@@ -32,5 +32,7 @@ services:
         value: INFO
       - key: OCR_LANGUAGES
         value: en,hi,mr
+      - key: ENABLE_LOCAL_EMBEDDINGS
+        value: "false"
       - key: ALLOW_GROUP_DOCUMENT_ACCESS
         value: "false"
