@@ -46,6 +46,18 @@ class Config:
     # OCR
     OCR_LANGUAGES: str = os.getenv("OCR_LANGUAGES", "en")
 
+    # OCR.space (cloud OCR - primary engine; no local Tesseract install needed).
+    # Get a free key at https://ocr.space/ ; stored in .env only (never commit).
+    OCR_SPACE_API_KEY: str = os.getenv("OCR_SPACE_API_KEY", "").strip()
+    # Free-tier endpoint; Pro subscriptions use a different endpoint URL.
+    OCR_SPACE_ENDPOINT: str = os.getenv("OCR_SPACE_ENDPOINT", "https://api.ocr.space/parse/image")
+    # 1 = original engine, 2 = newer engine (better accuracy on photos/scans)
+    OCR_SPACE_ENGINE: int = int(os.getenv("OCR_SPACE_ENGINE", "2"))
+    # How to send multiple OCR_LANGUAGES to OCR.space: 'auto' = let their
+    # engine detect the script (single request); 'first' = use only the first one.
+    OCR_SPACE_LANGUAGE_MODE: str = os.getenv("OCR_SPACE_LANGUAGE_MODE", "auto").strip().lower()
+    OCR_TIMEOUT_SECONDS: int = int(os.getenv("OCR_TIMEOUT_SECONDS", "30"))
+
     # Feature flags
     # ENABLE_OCR: Tesseract OCR for images/scanned PDFs (auto-detects availability).
     ENABLE_OCR: bool = os.getenv("ENABLE_OCR", "false").lower() == "true"

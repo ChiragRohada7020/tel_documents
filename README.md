@@ -66,7 +66,9 @@ Key settings in `.env` / `.env.example`:
 | `GROQ_API_KEY` | — | Required |
 | `MONGODB_URI` | `mongodb://localhost:27017` | |
 | `POLLING_MODE` | `true` | `false` + `WEBHOOK_URL` for webhook mode |
-| `ENABLE_OCR` | `false` | Tesseract OCR for images/scanned PDFs |
+| `ENABLE_OCR` | `false` | Cloud OCR (OCR.space) for images/scanned PDFs |
+| `OCR_SPACE_API_KEY` | — | OCR.space API key (https://ocr.space/) — enables cloud OCR |
+| `OCR_SPACE_ENGINE` | `2` | OCR.space engine: `1` original, `2` newer/better |
 | `ENABLE_LOCAL_EMBEDDINGS` | `false` | Loads the local sentence-transformer model (needs RAM) |
 | `API_KEY` | — | Required in production; used to auth the REST API |
 
