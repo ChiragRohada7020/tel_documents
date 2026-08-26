@@ -289,6 +289,83 @@ Return ONLY valid JSON."""
         except Exception:
             return None
 
+    async def extract_facts(self, document_text: str) -> Optional[List[Dict[str, str]]]:
+        """
+        Pull every concrete detail out of a document's text as a structured
+        fact sheet: names, IDs/numbers, amounts, dates, addresses, statuses...
+
+        Returns a list of {"label": ..., "value": ...} dicts, or None on failure.
+        """
+        excerpt = (document_text or "").strip()[:6000]
+        if not excerpt:
+            return None
+
+        prompt = f"""You are a precise information-extraction engine reading an OCR'd personal document.
+
+DOCUMENT TEXT:
+{excerpt}
+
+Extract EVERY concrete detail present in the text. Include things like:
+person names, organization names, ID/account/policy/registration/bill/invoice numbers,
+amounts with currency, unit counts, issue/due/expiry/renewal dates, addresses,
+phone numbers, vehicle/model references, status flags, periods covered, grades/positions.
+
+Return ONLY valid JSON exactly in this shape (6-18 entries is typical):
+
+{{"facts": [
+  {{"label": "Consumer Name", "value": "Chirag Rohada"}},
+  {{"label": "Bill Number", "value": "2026-08/77341"}},
+  {{"label": "Amount Due", "value": "INR 2450"}},
+  {{"label": "Due Date", "value": "2026-09-12"}}
+]}}
+
+RULES:
+1. Every entry must come from the document text itself - never invent values.
+2. Keep each value short and copy verbatim where possible.
+3. Use clear human labels ("Bill Number", not "field_4").
+4. Skip headers, page numbers, decorations, and OCR artifacts.
+5. If the text has almost nothing extractable, return {{"facts": []}}."""
+
+        meta_max_tokens = max(self.max_tokens, 2600)
+
+        async def _create(extra_kwargs: Optional[dict]) -> object:
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": meta_max_tokens,
+            }
+            payload.update(extra_kwargs or {})
+            return await self.client.chat.completions.create(**payload)
+
+        try:
+            try:
+                response = await _create({"reasoning_effort": "low"})
+            except Exception as effort_err:
+                if "reasoning_effort" not in str(effort_err).lower():
+                    raise
+                response = await _create(None)
+            raw = response.choices[0].message.content or ""
+            data = self._parse_json(raw)
+            if not isinstance(data, dict):
+                logger.warning("Fact extraction returned unparseable output.")
+                return None
+            facts = data.get("facts")
+            if not isinstance(facts, list):
+                return []
+            cleaned: List[Dict[str, str]] = []
+            for entry in facts:
+                if not isinstance(entry, dict):
+                    continue
+                label = str(entry.get("label", "")).strip().rstrip(": ")
+                value = str(entry.get("value", "")).strip()
+                if label and value and len(cleaned) < 25:
+                    cleaned.append({"label": label, "value": value})
+            return cleaned
+        except Exception as e:
+            logger.error(f"Error extracting facts: {e}")
+            return None
+
     async def summarize(self, text: str, max_tokens: int = 500) -> str:
         """Summarize a given text using the LLM."""
         try:

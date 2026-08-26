@@ -11,7 +11,7 @@ import os
 import re
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from bson import ObjectId
@@ -335,6 +335,88 @@ class DocumentService:
             if stored_name and metadata_stored:
                 self._remove_partial_upload(user_id, stored_name)
             return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Document management utilities
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_iso_date(raw: Any):
+        """Parse a YYYY-MM-DD string, returning None for junk."""
+        try:
+            return date.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            return None
+
+    def list_expiring(
+        self, user_id: int, ref_date: Optional[date] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Return the user's documents that carry an explicit expiry date,
+        soonest first. Each item includes days_remaining relative to ref_date
+        (negative = already expired).
+        """
+        ref = ref_date or date.today()
+        items: List[Dict[str, Any]] = []
+        try:
+            records = self.db.uploaded_files.find(
+                {"user_id": user_id, "expiry_date": {"$type": "string", "$ne": ""}},
+            )
+        except Exception as e:
+            logger.warning(f"list_expiring query failed: {e}")
+            return []
+        for record in records:
+            parsed = self._parse_iso_date(record.get("expiry_date"))
+            if parsed is None:
+                continue
+            items.append({
+                "_id": str(record["_id"]),
+                "filename": record.get("filename", ""),
+                "ai_title": record.get("ai_title", ""),
+                "expiry_date": record.get("expiry_date", ""),
+                "days_remaining": (parsed - ref).days,
+            })
+        items.sort(key=lambda item: item["days_remaining"])
+        return items
+
+    def rename_document(self, user_id: int, object_id: str, new_title: str) -> Optional[Dict[str, Any]]:
+        """
+        Rename a stored document everywhere its old filename is referenced:
+        metadata records, indexed chunks (source key), and document links.
+
+        The extension is preserved; collisions get -2/-3 suffixes via
+        ``_unique_filename`` so names stay readable instead of hex-tagged.
+
+        Returns {'old', 'new', 'title'} or None when the file does not exist.
+        """
+        file_info = self.get_file_by_id(user_id, object_id)
+        title = (new_title or "").strip()
+        if not file_info or not title:
+            return None
+        old_name = file_info["filename"]
+        root, ext = os.path.splitext(old_name)
+        new_name = self._unique_filename(user_id, self._title_slug(title) + (ext or ""))
+
+        self.db.uploaded_files.update_one(
+            {"_id": ObjectId(object_id), "user_id": user_id},
+            {"$set": {"filename": new_name, "ai_title": title}},
+        )
+        if old_name != new_name:
+            self.db.document_chunks.update_many(
+                {"user_id": user_id, "source": old_name},
+                {"$set": {"source": new_name}},
+            )
+            # Links reference filenames on either side of the pair.
+            self.db.document_links.update_many(
+                {"user_id": user_id, "left": old_name},
+                {"$set": {"left": new_name}},
+            )
+            self.db.document_links.update_many(
+                {"user_id": user_id, "right": old_name},
+                {"$set": {"right": new_name}},
+            )
+        logger.info(f"Renamed document '{old_name}' -> '{new_name}' (user {user_id})")
+        return {"old": old_name, "new": new_name, "title": title}
 
     def _remove_partial_upload(self, user_id: int, filename: str) -> None:
         """Remove partial metadata and search chunks after a failed upload."""

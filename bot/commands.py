@@ -8,7 +8,10 @@ import logging
 import os
 import re
 import tempfile
+from datetime import date, datetime, timedelta
 from functools import lru_cache
+from typing import Optional
+from zoneinfo import ZoneInfo
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
@@ -176,6 +179,233 @@ async def _deny_group_vault_access(update: Update) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Date-aware expiry queries ("what expires this month?")
+# ---------------------------------------------------------------------------
+
+_MONTH_NAMES = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
+    "december": 12,
+}
+
+_EXPIRY_KEYWORDS = (
+    # Stem-based so expire/expires/expiring/expired/expiry all match.
+    "expir", "renew",
+    "valid till", "valid upto", "valid until", "validity", "due date",
+    "overdue",
+)
+
+
+def _detect_expiry_query(message: str):
+    """
+    Return a scope when the message clearly asks about document expiry /
+    renewal dates, otherwise None.
+
+    Scopes: 'overdue' | 'this_month' | 'next_month' | 'soon' | 'all'
+            | 'month:<MM>' for a named calendar month.
+    """
+    msg = (message or "").lower()
+    if not any(keyword in msg for keyword in _EXPIRY_KEYWORDS):
+        return None
+    if "overdue" in msg or "already expired" in msg:
+        return "overdue"
+    if "next month" in msg:
+        return "next_month"
+    if "this month" in msg or "current month" in msg:
+        return "this_month"
+    for name, number in _MONTH_NAMES.items():
+        if re.search(rf"\b{name}\b", msg):
+            return f"month:{number:02d}"
+    if any(word in msg for word in ("soon", "upcoming", "coming")):
+        return "soon"
+    return "all"
+
+
+def _local_today() -> date:
+    """Today's date in the timezone configured for reminders."""
+    return datetime.now(ZoneInfo(Config.REMINDER_TIMEZONE)).date()
+
+
+def _scope_bounds(scope: str, today: date):
+    """Translate an expiry-query scope into (start_date, end_date, label)."""
+    if scope == "overdue":
+        return None, today, "already expired"
+    if scope == "soon":
+        return today, None, "expiring anytime"
+    if scope == "this_month":
+        start = today.replace(day=1)
+        end = (start.replace(day=28) + timedelta(days=7)).replace(day=1) - timedelta(days=1)
+        return start, end, start.strftime("%B %Y")
+    if scope == "next_month":
+        start = (today.replace(day=28) + timedelta(days=7)).replace(day=1)
+        end = (start.replace(day=28) + timedelta(days=7)).replace(day=1) - timedelta(days=1)
+        return start, end, start.strftime("%B %Y")
+    if scope.startswith("month:"):
+        number = int(scope.split(":", 1)[1])
+        year = today.year
+        start = today.replace(month=number, day=1, year=year)
+        if number < today.month:  # earlier month this year rolls forward
+            start = start.replace(year=year + 1)
+        end = (start.replace(day=28) + timedelta(days=7)).replace(day=1) - timedelta(days=1)
+        return start, end, start.strftime("%B %Y")
+    return None, None, "with any recorded expiry date"
+
+
+def _describe_days(days_remaining: int) -> str:
+    if days_remaining == 0:
+        return "⚠️ expires TODAY"
+    if days_remaining < 0:
+        return f"❌ expired {-days_remaining}d ago"
+    return f"in {days_remaining}d"
+
+
+async def _handle_expiry_query(update: Update, user_id: int, message: str) -> bool:
+    """
+    Answer questions like 'what expires this month?' straight from stored
+    metadata. Returns True when the message was handled as an expiry query.
+    """
+    scope = _detect_expiry_query(message)
+    if scope is None:
+        return False
+
+    today = _local_today()
+    items = _get_doc_service().list_expiring(user_id, ref_date=today)
+
+    start, end, label = _scope_bounds(scope, today)
+    if start or end:
+        filtered = []
+        for item in items:
+            parsed = DocumentService._parse_iso_date(item["expiry_date"])
+            if parsed is None:
+                continue
+            if start and parsed < start:
+                continue
+            if end and parsed > end:
+                continue
+            filtered.append(item)
+        items = filtered
+
+    lines = [f"⏰ Documents {label}:", ""]
+    shown = items[:15]
+    if shown:
+        for item in shown:
+            name = item.get("ai_title") or item["filename"]
+            lines.append(f"• {name} — {item['expiry_date']} ({_describe_days(item['days_remaining'])})")
+        hidden = len(items) - len(shown)
+        if hidden > 0:
+            lines.append(f"…and {hidden} more.")
+    else:
+        lines.append("Nothing found.")
+        lines.append("Upload a document whose OCR shows an explicit expiry /")
+        lines.append("valid-till date and I will track it automatically.")
+
+    if items and scope != "overdue":
+        soonest = min((i["days_remaining"] for i in items), default=None)
+        if soonest is not None and 0 <= soonest <= 30:
+            lines.append("")
+            lines.append("🔔 Daily reminders fire 30, 7, 1 days before — and on the day itself.")
+
+    await update.message.reply_text(_NEWLINE.join(lines), reply_markup=_build_followup_keyboard())
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Structured fact sheets (📊 Key details button)
+# ---------------------------------------------------------------------------
+
+def _format_facts(header: str, facts) -> Optional[str]:
+    """Render extracted facts as a simple readable sheet."""
+    if not facts:
+        return None
+    lines = [f"📊 Key details — {header}:", ""]
+    for fact in facts[:25]:
+        label = str(fact.get("label", "")).strip().rstrip(":").rstrip() or "Detail"
+        value = str(fact.get("value", "")).strip()
+        if value:
+            lines.append(f"• {label}: {value}")
+    return _NEWLINE.join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Natural-language rename ('rename this to ...')
+# ---------------------------------------------------------------------------
+
+_RENAME_PREFIX_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:rename|naam\s+badlo|naam\s+badal|change\s+the\s+name)\b[,:]?\s*(.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_RENAME_TO_SPLIT_RE = re.compile(r"\s+(?:as|=>|->)\s+|\s+to\s+|\s+to$", re.IGNORECASE)
+
+
+def _parse_rename_request(message):
+    """
+    Parse 'rename [old-name] to [new-title]'.
+
+    Returns (target_query, new_title) where either part may be '' meaning
+    'unspecified'. Both parts None => the message is not a rename request.
+    """
+    match = _RENAME_PREFIX_RE.match(message or "")
+    if not match:
+        return None, None
+    remainder = (match.group(1) or "").strip()
+    if not remainder:
+        return "", ""
+    parts = _RENAME_TO_SPLIT_RE.split(remainder, maxsplit=1)
+    if len(parts) == 2:
+        target, new_title = parts[0].strip(), parts[1].strip(" \"'")
+        return target, new_title or None
+    return "", remainder.strip(" \"'")
+
+
+async def _handle_rename_request(update: Update, user_id: int, message: str,
+                                 context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Handle typed renames like:
+      'rename this to Electricity Bill MSEB Aug'
+      'rename pan card copy to PAN Card Chirag'
+    Uses the currently-active document when no specific source is named.
+    """
+    target_query, new_title = _parse_rename_request(message)
+    if new_title is None and target_query is None:
+        return False
+    if not new_title:
+        await update.message.reply_text(
+            "Tell me the new name too — e.g. ‘rename this to MSEB Aug bill’."
+        )
+        return True
+
+    service = _get_doc_service()
+    file_info = None
+    if target_query:
+        matches = service.find_documents(user_id, target_query, limit=1)
+        file_info = matches[0] if matches else None
+        if file_info is None:
+            await update.message.reply_text(
+                f"I could not find a document matching “{target_query}”. "
+                "Open your 📋 list and tap the document first."
+            )
+            return True
+    else:
+        file_info = _active_document(user_id, context)
+        if file_info is None:
+            await update.message.reply_text(
+                "Open the document first (tap it in your 📋 list), then say ‘rename this to …’."
+            )
+            return True
+
+    _remember_document(context, file_info)
+    result = await asyncio.to_thread(service.rename_document, user_id, file_info["_id"], new_title)
+    if result:
+        await update.message.reply_text(
+            f"✏️ Renamed!\nWas: {result['old']}\nNow: {result['new']}",
+            reply_markup=_build_followup_keyboard(),
+        )
+    else:
+        await update.message.reply_text("⚠️ Renaming failed — please try again.")
+    return True
+
+
 async def _safe_reply(update: Update, text: str, reply_markup=None, parse_mode: str = None) -> None:
     """
     Reply with text; automatically falls back to plain text if Markdown
@@ -280,12 +510,16 @@ def _build_documents_keyboard(
     for doc in docs[:10]:
         icon = "🖼️" if doc.get("file_type") == "photo" else "📄"
         name = doc.get("ai_title") or doc["filename"]
-        label = f"{icon} {name}"[:60]
+        label = f"{icon} {name}"[:38]
         rows.append([
             InlineKeyboardButton(label, callback_data=f"get_doc:{doc['_id']}"),
-            InlineKeyboardButton("Summary", callback_data=f"summary:{doc['_id']}"),
+            InlineKeyboardButton("📝 Summary", callback_data=f"summary:{doc['_id']}"),
         ])
-        rows.append([InlineKeyboardButton("Delete this document", callback_data=f"delete_doc:{doc['_id']}")])
+        rows.append([
+            InlineKeyboardButton("📊 Key details", callback_data=f"facts:{doc['_id']}"),
+            InlineKeyboardButton("✏️ Rename", callback_data=f"rename_doc:{doc['_id']}"),
+            InlineKeyboardButton("🗑 Delete", callback_data=f"delete_doc:{doc['_id']}"),
+        ])
     if page > 0 or (page + 1) * Config.DOCUMENT_PAGE_SIZE < total:
         navigation = []
         if page > 0:
@@ -391,6 +625,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             f"What detail should I add to {file_info.get('ai_title') or file_info['filename']}? Send it in your next message."
         )
+        return
+
+    # Applying a rename started via the ✏️ Rename button: the next message
+    # becomes the new human-readable title.
+    awaiting_rename = context.user_data.get("awaiting_rename_for")
+    if awaiting_rename:
+        result = await asyncio.to_thread(
+            _get_doc_service().rename_document, user_id, awaiting_rename, user_message
+        )
+        context.user_data.pop("awaiting_rename_for", None)
+        if result:
+            await update.message.reply_text(
+                f"✏️ Renamed!\nNow: {result['new']}",
+                reply_markup=_build_followup_keyboard(),
+            )
+        else:
+            await update.message.reply_text("⚠️ I could not rename that document. Try again from the list.")
+        return
+
+    # Fast paths that never reach the LLM classifier:
+    #   typed renames and date-aware expiry questions.
+    if await _handle_rename_request(update, user_id, user_message, context):
+        return
+    if await _handle_expiry_query(update, user_id, user_message):
         return
 
     # Natural document actions work after viewing, receiving, or discussing a file.
@@ -935,6 +1193,57 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             InlineKeyboardButton("Cancel", callback_data="list_docs"),
         ]])
         await _safe_edit(query, f"Delete '{file_info['ai_title'] or file_info['filename']}'? This cannot be undone.", keyboard)
+        return
+
+    if callback_data.startswith("facts:"):
+        object_id = callback_data.split(":", 1)[1]
+        file_info = _get_doc_service().get_file_by_id(user_id, object_id)
+        if not file_info:
+            await _safe_edit(query, "⚠️ File not found. It may have been deleted.")
+            return
+        _remember_document(context, file_info)
+        display_name = file_info.get("ai_title") or file_info["filename"]
+        text = await asyncio.to_thread(
+            _get_doc_service().get_document_text, user_id, file_info["filename"]
+        )
+        if not text:
+            await query.message.reply_text("I have no readable text for this file yet. Re-send it once so I can index it properly.")
+            return
+        status = await query.message.reply_text("📊 Pulling every detail…")
+        facts = await _get_groq_service().extract_facts(text)
+        rendered = _format_facts(display_name, facts)
+        if not rendered:
+            await status.edit_text(
+                "I could not pull structured details from this file.\n"
+                "Try ‘📝 Summary’, or ask me a question about it directly."
+            )
+            return
+        max_len = 4000
+        while rendered:
+            chunk, rendered = rendered[:max_len], rendered[max_len:]
+            try:
+                await query.message.reply_text(chunk)
+            except Exception as e:
+                logger.error(f"Failed sending fact chunk: {e}")
+                break
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+
+    if callback_data.startswith("rename_doc:"):
+        object_id = callback_data.split(":", 1)[1]
+        file_info = _get_doc_service().get_file_by_id(user_id, object_id)
+        if not file_info:
+            await _safe_edit(query, "⚠️ File not found. It may have been deleted.")
+            return
+        _remember_document(context, file_info)
+        current = file_info.get("ai_title") or file_info["filename"]
+        context.user_data["awaiting_rename_for"] = object_id
+        await query.message.reply_text(
+            f"✏️ Send the new name for “{current}”.\nExample: Electricity Bill — MSEB — August"
+        )
         return
 
     if callback_data.startswith("summary:"):

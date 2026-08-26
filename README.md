@@ -8,7 +8,10 @@ A private-chat Telegram bot that stores PDF, DOCX, and image uploads, indexes th
 - **AI metadata** — every upload gets an AI-generated title, category, tags, search aliases (incl. Hinglish/typo variants), entities, and an expiry date.
 - **Search** — keyword text search over indexed chunks (local embeddings are supported but disabled by default to keep memory low).
 - **Chat** — ask questions about your documents; the bot retrieves relevant excerpts and answers via Groq.
-- **Expiry reminders** — daily notifications for documents with an expiry date.
+- **Expiry reminders** — daily notifications 30/7/1 days before (and on the day) a document expires.
+- **Expiry questions** — ask “what expires this month?”, “anything overdue?” or name any month.
+- **Document rename** — say *“rename this to Electricity Bill MSEB Aug”* or tap ✏️ Rename on any listed file.
+- **Key-details fact sheet** — the 📊 Key details button extracts every number, date, name and amount via AI.
 - **Image albums → PDF** — send a media-group (album) of photos and the bot merges them into a single PDF, sends it back, and indexes it.
 - **JARVIS dashboard** — a themed web UI at `/dashboard` (stats, document archive, semantic scan, chat console, upload bay).
 
