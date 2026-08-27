@@ -182,7 +182,7 @@ Respond with ONLY valid JSON, no other text:
 
         prompt = f"""You are an intelligent personal document organizer.
 
-The user uploads a document and may provide a short description.
+The user uploads a document/image and may provide a short description/caption.
 
 Your job is to deeply understand what the document is and generate rich metadata so that the document can be found later even if the user uses:
 - Different names
@@ -195,13 +195,13 @@ Your job is to deeply understand what the document is and generate rich metadata
 - Related concepts
 - Partial names
 
-USER DESCRIPTION:
+CAPTION FROM USER (may be empty or brief):
 {desc}
 
-DOCUMENT CONTENT:
+FULL DOCUMENT/IMAGE CONTENT (OCR / extracted text):
 {doc_excerpt}
 
-Analyze both the user's description and document content.
+Analyze BOTH the caption and the full document content. The caption is supplementary context; the document content is the primary source for extracting facts, dates, numbers, names, and the true document type. Even when the caption is short or generic, mine every useful detail from the document content itself.
 
 Return ONLY valid JSON in exactly this format:
 
@@ -233,6 +233,7 @@ METADATA RULES:
 12. Generate between 10 and 25 combined tags and search_aliases when appropriate.
 13. Use the category list exactly; select "other" if none fits.
 14. Only set expiry_date when the document explicitly gives an expiry, valid-until, renewal-due, or end date. Never guess dates.
+15. When the caption is short or empty, rely entirely on the document content to extract all details. Do not skip extraction just because the caption is brief.
 
 Return ONLY valid JSON."""
 

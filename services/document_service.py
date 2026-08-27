@@ -81,12 +81,26 @@ class DocumentService:
             line = raw.strip()
             if not line or line.lower().startswith("ocr text from image"):
                 continue
+            # Strip common OCR prefixes / headers that aren't document content.
+            if line.lower().startswith(("extracted text", "document text", "page 1", "page 1 of")):
+                continue
             letters = sum(ch.isalpha() for ch in line)
             digits = sum(ch.isdigit() for ch in line)
+            # Accept lines that are predominantly alphabetic (real text, not just numbers/codes).
             if letters < 3 or letters <= digits:
-                continue  # skip numbers-only / symbol junk lines
+                continue
             snippet = " ".join(line.split()[:8])
             if len(snippet) >= 4:
+                return snippet[:80].strip(" -:,.")
+        # Last resort: if OCR had no clean lines, grab the first non-empty line
+        # that has at least some letters (relaxes the letters<=digits check).
+        for raw in (ocr_text or "").splitlines():
+            line = raw.strip()
+            if not line or line.lower().startswith("ocr text from image"):
+                continue
+            letters = sum(ch.isalpha() for ch in line)
+            if letters >= 5:
+                snippet = " ".join(line.split()[:8])
                 return snippet[:80].strip(" -:,.")
         return ""
 
